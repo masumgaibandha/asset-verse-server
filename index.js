@@ -29,6 +29,8 @@ async function run() {
     const db = client.db('asset-verse');
     const requestsCollection = db.collection('requests');
     const packagesCollection = db.collection('packages');
+    const usersCollection = db.collection('users');
+    const paymentsCollection = db.collection('payments');
 
 
     // Assets api
@@ -94,19 +96,82 @@ async function run() {
           },
         ],
         mode: 'payment',
+
+        //  Needed to know which HR to upgrade
+        customer_email: paymentInfo.hrEmail,
+
+        //  Needed for success page verification
         success_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-package`,
+
+        //  Store upgrade info
         metadata: {
-         packageId: paymentInfo.packageId,
-         employeeLimit: paymentInfo.employeeLimit,
+          packageId: paymentInfo.packageId,
+          packageName: paymentInfo.packageName,
+          employeeLimit: String(paymentInfo.employeeLimit),
         },
       });
-      console.log(session)
+
       res.send({ url: session.url });
     });
 
 
 
+   app.patch('/upgrade-success', async (req, res) => {
+  const sessionId = req.query.session_id;
+
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+  if (session.payment_status !== 'paid') {
+    return res.send({ success: false, message: 'Payment not completed' });
+  }
+
+  const hrEmail = session.customer_email;
+  const packageName = session.metadata.packageName;
+  const employeeLimit = Number(session.metadata.employeeLimit);
+
+  //  prevent duplicate payment insert (same transactionId)
+  const transactionId = session.payment_intent;
+  const paymentExists = await paymentsCollection.findOne({ transactionId });
+
+  if (paymentExists) {
+    return res.send({
+      success: true,
+      message: "Payment already recorded",
+      transactionId,
+    });
+  }
+
+  //  1) Update HR user package info
+  const userQuery = { email: hrEmail, role: 'hr' };
+  const userUpdate = {
+    $set: {
+      subscription: packageName.toLowerCase(),
+      packageLimit: employeeLimit,
+      updatedAt: new Date(),
+    },
+  };
+  const updateResult = await usersCollection.updateOne(userQuery, userUpdate);
+
+  //  2) Save payment history
+  const paymentDoc = {
+    hrEmail,
+    packageName,
+    employeeLimit,
+    amount: session.amount_total / 100,
+    transactionId,
+    paymentDate: new Date(),
+    status: 'completed',
+  };
+  const paymentResult = await paymentsCollection.insertOne(paymentDoc);
+
+  return res.send({
+    success: true,
+    transactionId,
+    updateResult,
+    paymentResult,
+  });
+});
 
 
     // Send a ping to confirm a successful connection
