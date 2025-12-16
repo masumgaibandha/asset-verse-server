@@ -2,7 +2,8 @@ const express = require('express')
 const cors = require('cors')
 const app = express();
 require('dotenv').config()
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
 const port = process.env.PORT || 3000
 
@@ -27,19 +28,33 @@ async function run() {
 
     const db = client.db('asset-verse');
     const requestsCollection = db.collection('requests');
+    const packagesCollection = db.collection('packages');
+
 
     // Assets api
     app.get('/requests', async (req, res) => {
       const query = {}
-      const {email} = req.query;
-      if(email){
+      const { email } = req.query;
+      if (email) {
         query.employeeEmail = email;
       }
+      const options = { sort: { createdAt: -1 } }
 
-      const cursor = requestsCollection.find(query);
+      const cursor = requestsCollection.find(query, options);
       const result = await cursor.toArray()
       res.send(result);
     })
+
+    app.get('/packages', async (req, res) => {
+
+      const cursor = packagesCollection.find({}).sort({ employeeLimit: 1 });
+      const result = await cursor.toArray();
+      res.send(result);
+
+    });
+
+
+
 
     app.post('/requests', async (req, res) => {
       const request = req.body;
@@ -50,10 +65,45 @@ async function run() {
 
       const result = await requestsCollection.insertOne(request);
       res.send(result);
+    })
 
+    app.delete('/requests/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await requestsCollection.deleteOne(query)
+      res.send(result);
     })
 
 
+    app.post('/create-checkout-session', async (req, res) => {
+      const paymentInfo = req.body;
+
+      const amount = parseInt(paymentInfo.price) * 100;
+
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: 'usd',
+              unit_amount: amount,
+              product_data: {
+                name: `AssetVerse Package: ${paymentInfo.packageName}`,
+              },
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-success`,
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-package`,
+        metadata: {
+         packageId: paymentInfo.packageId,
+         employeeLimit: paymentInfo.employeeLimit,
+        },
+      });
+      console.log(session)
+      res.send({ url: session.url });
+    });
 
 
 
