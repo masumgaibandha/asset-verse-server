@@ -29,15 +29,23 @@ async function run() {
     const requestsCollection = db.collection('requests');
 
     // Assets api
-    app.get('/assets', async (req, res) => {
+    app.get('/requests', async (req, res) => {
+      const query = {}
+      const {email} = req.query;
+      if(email){
+        query.employeeEmail = email;
+      }
 
+      const cursor = requestsCollection.find(query);
+      const result = await cursor.toArray()
+      res.send(result);
     })
 
     app.post('/requests', async (req, res) => {
       const request = req.body;
 
       request.requestStatus = 'pending';
-      request.requestDate = new Date();
+      request.createdAt = new Date();
       request.approvalDate = null;
 
       const result = await requestsCollection.insertOne(request);
