@@ -94,7 +94,7 @@ async function run() {
           },
         ],
         mode: 'payment',
-        success_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-success`,
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-package`,
         metadata: {
          packageId: paymentInfo.packageId,
