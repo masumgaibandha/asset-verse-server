@@ -6,9 +6,41 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
 const port = process.env.PORT || 3000
+// const crypto = require("crypto")
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./asset-verse-firebase-adminsdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+
+// Middleware
 app.use(express.json());
 app.use(cors())
+
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
+
+  if (!token) {
+    return res.status(401).send({ message: 'unauthorized access' })
+  }
+
+  try {
+    const idToken = token.split(' ')[1];
+    const decoded = await admin.auth().verifyIdToken(idToken)
+    console.log('decoded in the token', decoded)
+    req.decoded_email = decoded.email;
+    next();
+  }
+  catch (err) {
+    return res.status(401).send({ message: 'unauthorized access' })
+  }
+
+
+}
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.xhu33ja.mongodb.net/?appName=Cluster0`;
 
@@ -30,7 +62,7 @@ async function run() {
     const usersCollection = db.collection('users');
     const paymentsCollection = db.collection('payments');
 
-    // ✅ Requests API
+    //  Requests API
     app.get('/requests', async (req, res) => {
       const query = {}
       const { email } = req.query;
@@ -62,20 +94,26 @@ async function run() {
       res.send(result);
     })
 
-    // ✅ Packages API
+    //  Packages API
     app.get('/packages', async (req, res) => {
       const cursor = packagesCollection.find({}).sort({ employeeLimit: 1 });
       const result = await cursor.toArray();
       res.send(result);
     });
 
-    // ✅ Payments API (NEW)
-    app.get('/payments', async (req, res) => {
+    //  Payments API (NEW)
+    app.get('/payments', verifyFBToken, async (req, res) => {
       const email = req.query.email;
       const query = {};
 
+      // console.log('Header look', req.headers)
+
       if (email) {
         query.hrEmail = email;
+        if (email !== req.decoded_email) {
+          return res.status(403).send({ message: 'forbidden access' })
+        }
+
       }
 
       const result = await paymentsCollection
@@ -86,7 +124,7 @@ async function run() {
       res.send(result);
     });
 
-    // ✅ Stripe Checkout Session
+    //  Stripe Checkout Session
     app.post('/create-checkout-session', async (req, res) => {
       const paymentInfo = req.body;
       const amount = parseInt(paymentInfo.price) * 100;
@@ -120,7 +158,7 @@ async function run() {
       res.send({ url: session.url });
     });
 
-    // ✅ Upgrade Success
+    //  Upgrade Success
     app.patch('/upgrade-success', async (req, res) => {
       const sessionId = req.query.session_id;
 
@@ -134,7 +172,7 @@ async function run() {
       const packageName = session.metadata.packageName;
       const employeeLimit = Number(session.metadata.employeeLimit);
 
-      // ✅ prevent duplicate insert
+      //  prevent duplicate insert
       const transactionId = session.payment_intent;
       const paymentExists = await paymentsCollection.findOne({ transactionId });
 
@@ -146,7 +184,7 @@ async function run() {
         });
       }
 
-      // ✅ Update HR user package info
+      //  Update HR user package info
       const userQuery = { email: hrEmail, role: 'hr' };
       const userUpdate = {
         $set: {
@@ -157,7 +195,7 @@ async function run() {
       };
       const updateResult = await usersCollection.updateOne(userQuery, userUpdate);
 
-      // ✅ Save payment history
+      //  Save payment history
       const paymentDoc = {
         hrEmail,
         packageName,
