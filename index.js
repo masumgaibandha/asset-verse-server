@@ -63,6 +63,7 @@ async function run() {
     const packagesCollection = db.collection('packages');
     const usersCollection = db.collection('users');
     const paymentsCollection = db.collection('payments');
+    const employeesCollection = db.collection('employees')
 
     // Users related Apis
 
@@ -81,11 +82,31 @@ async function run() {
       res.send(result);
     })
 
+// Employee related API
+
+    app.get('/employee', async (req, res) => {
+      const query = {}
+      if(req.query.status){
+        query.status = req.query.status
+      }
+      const cursor = employeesCollection.find(query)
+      const result = await cursor.toArray();
+      res.send(result)
+    })
+
+    app.post('/employees', async (req, res) => {
+      const employee = req.body; 
+
+      employee.status = 'pending'
+      employee.createdAt = new Date();
+
+      const result = await employeesCollection.insertOne(employee)
+      res.send(result)
+    })
 
 
 
-
-    //  Requests API
+    //  Requests Related API
     app.get('/requests', async (req, res) => {
       const query = {}
       const { email } = req.query;
@@ -117,7 +138,7 @@ async function run() {
       res.send(result);
     })
 
-    //  Packages API
+    //  Packages Related API
     app.get('/packages', async (req, res) => {
       const cursor = packagesCollection.find({}).sort({ employeeLimit: 1 });
       const result = await cursor.toArray();
