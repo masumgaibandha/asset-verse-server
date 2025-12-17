@@ -10,10 +10,12 @@ const port = process.env.PORT || 3000
 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./asset-verse-firebase-adminsdk.json");
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_ADMIN_B64, "base64").toString("utf8")
+);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 
 
