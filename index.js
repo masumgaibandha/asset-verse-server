@@ -74,19 +74,19 @@ async function run() {
       const email = user.email;
       const userExists = await usersCollection.findOne({ email })
 
-      if(userExists){
-        return res.send({message: 'user exists'})
+      if (userExists) {
+        return res.send({ message: 'user exists' })
       }
 
       const result = await usersCollection.insertOne(user)
       res.send(result);
     })
 
-// Employee related API
+    // Employee related API
 
-    app.get('/employee', async (req, res) => {
+    app.get('/employees', async (req, res) => {
       const query = {}
-      if(req.query.status){
+      if (req.query.status) {
         query.status = req.query.status
       }
       const cursor = employeesCollection.find(query)
@@ -95,7 +95,7 @@ async function run() {
     })
 
     app.post('/employees', async (req, res) => {
-      const employee = req.body; 
+      const employee = req.body;
 
       employee.status = 'pending'
       employee.createdAt = new Date();
@@ -104,6 +104,31 @@ async function run() {
       res.send(result)
     })
 
+    // approve employee
+    app.patch('/employees/:id', verifyFBToken, async (req, res) => {
+      const status = req.body.status;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const update = {
+        $set: {
+          status: status,
+          approvedAt: new Date(),
+        },
+      };
+
+      const result = await employeesCollection.updateOne(query, update);
+      res.send(result);
+    });
+
+    // reject employee (delete)
+    app.delete('/employees/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const result = await employeesCollection.deleteOne(query);
+      res.send(result);
+    });
 
 
     //  Requests Related API
