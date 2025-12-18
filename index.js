@@ -106,18 +106,28 @@ async function run() {
 
     // approve employee
     app.patch('/employees/:id', verifyFBToken, async (req, res) => {
-      const status = req.body.status;
+      const { status, email } = req.body;
       const id = req.params.id;
+
       const query = { _id: new ObjectId(id) };
 
       const update = {
         $set: {
-          status: status,
+          status,
           approvedAt: new Date(),
         },
       };
 
       const result = await employeesCollection.updateOne(query, update);
+
+      // if approved -> update user role in USERS collection
+      if (status === 'approved' && email) {
+        await usersCollection.updateOne(
+          { email },
+          { $set: { role: 'employee' } }
+        );
+      }
+
       res.send(result);
     });
 
