@@ -65,7 +65,44 @@ async function run() {
     const paymentsCollection = db.collection('payments');
     const employeesCollection = db.collection('employees')
 
+    // Verify HR
+    const verifyHR = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== 'hr') {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+      next()
+    }
+
+
     // Users related Apis
+
+    app.get('/users', verifyFBToken, async (req, res) => {
+      const cursor = usersCollection.find().limit(10);
+      const result = await cursor.toArray();
+      res.send(result)
+    })
+
+    app.get('/users/:id', async (req, res) => {
+
+    })
+
+    app.get('/users/:email/role', verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+      const query = { email }
+      const user = await usersCollection.findOne({ email });
+      res.send({ role: user?.role || 'user' });
+      // security: user can only check their own role
+      // if (email !== req.decoded_email) {
+      //   return res.status(403).send({ message: 'forbidden access' });
+      // }
+
+
+    });
+
 
     app.post('/users', async (req, res) => {
       const user = req.body;
@@ -79,6 +116,19 @@ async function run() {
       }
 
       const result = await usersCollection.insertOne(user)
+      res.send(result);
+    })
+
+    app.patch('/users/:id/role', verifyFBToken, verifyHR, async (req, res) => {
+      const id = req.params.id;
+      const roleInfo = req.body;
+      const query = { _id: new ObjectId(id) }
+      const updatedDoc = {
+        $set: {
+          role: roleInfo.role
+        }
+      }
+      const result = await usersCollection.updateOne(query, updatedDoc)
       res.send(result);
     })
 
@@ -105,7 +155,7 @@ async function run() {
     })
 
     // approve employee
-    app.patch('/employees/:id', verifyFBToken, async (req, res) => {
+    app.patch('/employees/:id', verifyFBToken, verifyHR, async (req, res) => {
       const { status, email } = req.body;
       const id = req.params.id;
 
