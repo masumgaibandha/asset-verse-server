@@ -97,6 +97,12 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/users/me", verifyFBToken, async (req, res) => {
+      const email = req.decoded_email;
+      const user = await usersCollection.findOne({ email });
+      res.send(user || {});
+    });
+
     // NOTE: keep empty if you’re not using it
     app.get("/users/:id", async (req, res) => {
       res.send({ message: "not implemented" });
@@ -111,7 +117,7 @@ async function run() {
 
     app.post("/users", async (req, res) => {
       const user = req.body;
-      user.role = "user";
+      user.role = user.role || "user";
       user.createdAt = new Date();
 
       const email = user.email;
@@ -119,6 +125,28 @@ async function run() {
       if (userExists) return res.send({ message: "user exists" });
 
       const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+
+    // HR register (free 5 employees)
+    app.post("/users/hr", async (req, res) => {
+      const user = req.body;
+
+      const email = user.email;
+      const userExists = await usersCollection.findOne({ email });
+      if (userExists) return res.send({ message: "user exists" });
+
+      const hrDoc = {
+        email,
+        displayName: user.displayName || "HR",
+        photoURL: user.photoURL || "",
+        role: "hr",
+        subscription: "free",
+        packageLimit: 1,
+        createdAt: new Date(),
+      };
+
+      const result = await usersCollection.insertOne(hrDoc);
       res.send(result);
     });
 
@@ -151,15 +179,21 @@ async function run() {
 
     // ✅ UPDATED: set default workStatus on create
     app.post("/employees", async (req, res) => {
-      const employee = req.body;
+      try {
+        const employee = req.body;
+        employee.status = "pending";
+        employee.workStatus = "inactive";
+        employee.createdAt = new Date();
 
-      employee.status = "pending";
-      employee.workStatus = "inactive"; 
-      employee.createdAt = new Date();
-
-      const result = await employeesCollection.insertOne(employee);
-      res.send(result);
+        const result = await employeesCollection.insertOne(employee);
+        res.send(result);
+      } catch (err) {
+        console.log("EMPLOYEE POST ERROR:", err);
+        res.status(400).send({ message: err.message });
+      }
     });
+
+
 
     // approve employee
     app.patch('/employees/:id', verifyFBToken, verifyHR, async (req, res) => {
@@ -239,12 +273,22 @@ async function run() {
       res.send(result);
     });
 
+
     // ✅ UPDATED Assign request + set employee busy
     app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
       const { employeeId, employeeName, employeeEmail } = req.body;
       const id = req.params.id;
 
-      // 1) update request
+      const hrEmail = req.decoded_email;
+
+      const hr = await usersCollection.findOne({ email: hrEmail, role: "hr" });
+      if (!hr) return res.status(403).send({ message: "forbidden access" });
+
+      const credit = Number(hr.packageLimit ?? 0);
+      if (credit <= 0) {
+        return res.status(402).send({ message: "no credit" });
+      }
+
       const requestResult = await requestsCollection.updateOne(
         { _id: new ObjectId(id) },
         {
@@ -258,13 +302,17 @@ async function run() {
         }
       );
 
-      // 2) set employee busy
       const employeeResult = await employeesCollection.updateOne(
         { _id: new ObjectId(employeeId) },
         { $set: { workStatus: "busy" } }
       );
 
-      res.send({ requestResult, employeeResult });
+      const creditResult = await usersCollection.updateOne(
+        { email: hrEmail, role: "hr", packageLimit: { $gt: 0 } },
+        { $inc: { packageLimit: -1 } }
+      );
+
+      res.send({ requestResult, employeeResult, creditResult });
     });
 
     // 21/12/25
@@ -388,8 +436,10 @@ async function run() {
         {
           $set: {
             subscription: packageName.toLowerCase(),
-            packageLimit: employeeLimit,
             updatedAt: new Date(),
+          },
+          $inc: {
+            packageLimit: employeeLimit,
           },
         }
       );
