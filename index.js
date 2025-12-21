@@ -1,15 +1,18 @@
-const express = require('express')
-const cors = require('cors')
-const app = express();
-require('dotenv').config()
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-const stripe = require('stripe')(process.env.STRIPE_SECRET);
+// index.js (clean + commented where updated)
 
-const port = process.env.PORT || 3000
-// const crypto = require("crypto")
+const express = require("express");
+const cors = require("cors");
+require("dotenv").config();
+
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 const admin = require("firebase-admin");
 
+const app = express();
+const port = process.env.PORT || 3000;
+
+// -------------------- Firebase Admin (from base64 env) --------------------
 const serviceAccount = JSON.parse(
   Buffer.from(process.env.FIREBASE_ADMIN_B64, "base64").toString("utf8")
 );
@@ -18,32 +21,27 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-
-// Middleware
+// -------------------- Middleware --------------------
 app.use(express.json());
-app.use(cors())
+app.use(cors());
 
+// -------------------- Verify Firebase Token --------------------
 const verifyFBToken = async (req, res, next) => {
   const token = req.headers.authorization;
 
-  if (!token) {
-    return res.status(401).send({ message: 'unauthorized access' })
-  }
+  if (!token) return res.status(401).send({ message: "unauthorized access" });
 
   try {
-    const idToken = token.split(' ')[1];
-    const decoded = await admin.auth().verifyIdToken(idToken)
-    console.log('decoded in the token', decoded)
+    const idToken = token.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
     req.decoded_email = decoded.email;
     next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
   }
-  catch (err) {
-    return res.status(401).send({ message: 'unauthorized access' })
-  }
+};
 
-
-}
-
+// -------------------- MongoDB --------------------
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.xhu33ja.mongodb.net/?appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -51,108 +49,117 @@ const client = new MongoClient(uri, {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
 async function run() {
   try {
     await client.connect();
 
-    const db = client.db('asset-verse');
-    const requestsCollection = db.collection('requests');
-    const packagesCollection = db.collection('packages');
-    const usersCollection = db.collection('users');
-    const paymentsCollection = db.collection('payments');
-    const employeesCollection = db.collection('employees')
+    const db = client.db("asset-verse");
+    const requestsCollection = db.collection("requests");
+    const packagesCollection = db.collection("packages");
+    const usersCollection = db.collection("users");
+    const paymentsCollection = db.collection("payments");
+    const employeesCollection = db.collection("employees");
 
-    // Verify HR
+    // -------------------- Verify HR (UPDATED) --------------------
+    // ✅ uses decoded email from verifyFBToken
     const verifyHR = async (req, res, next) => {
       const email = req.decoded_email;
-      const query = { email };
-      const user = await usersCollection.findOne(query);
-
-      if (!user || user.role !== 'hr') {
-        return res.status(403).send({ message: 'forbidden access' })
-      }
-      next()
-    }
-
-
-    // Users related Apis
-
-    app.get('/users', verifyFBToken, async (req, res) => {
-      const cursor = usersCollection.find().limit(10);
-      const result = await cursor.toArray();
-      res.send(result)
-    })
-
-    app.get('/users/:id', async (req, res) => {
-
-    })
-
-    app.get('/users/:email/role', verifyFBToken, async (req, res) => {
-      const email = req.params.email;
-      const query = { email }
       const user = await usersCollection.findOne({ email });
-      res.send({ role: user?.role || 'user' });
-      // security: user can only check their own role
-      // if (email !== req.decoded_email) {
-      //   return res.status(403).send({ message: 'forbidden access' });
-      // }
 
+      if (!user || user.role !== "hr") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
 
+    // ==================== USERS APIs ====================
+
+    app.get("/users", verifyFBToken, async (req, res) => {
+      const searchText = req.query.searchText;
+      const query = {};
+
+      if (searchText) {
+        query.$or = [
+          { displayName: { $regex: searchText, $options: "i" } },
+          { email: { $regex: searchText, $options: "i" } },
+        ];
+      }
+
+      const result = await usersCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .toArray();
+
+      res.send(result);
     });
 
+    // NOTE: keep empty if you’re not using it
+    app.get("/users/:id", async (req, res) => {
+      res.send({ message: "not implemented" });
+    });
 
-    app.post('/users', async (req, res) => {
+    // ✅ role API used by useRole hook
+    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+      const user = await usersCollection.findOne({ email });
+      res.send({ role: user?.role || "user" });
+    });
+
+    app.post("/users", async (req, res) => {
       const user = req.body;
-      user.role = 'user';
+      user.role = "user";
       user.createdAt = new Date();
+
       const email = user.email;
-      const userExists = await usersCollection.findOne({ email })
+      const userExists = await usersCollection.findOne({ email });
+      if (userExists) return res.send({ message: "user exists" });
 
-      if (userExists) {
-        return res.send({ message: 'user exists' })
-      }
-
-      const result = await usersCollection.insertOne(user)
+      const result = await usersCollection.insertOne(user);
       res.send(result);
-    })
+    });
 
-    app.patch('/users/:id/role', verifyFBToken, verifyHR, async (req, res) => {
+    // ✅ HR can change roles
+    app.patch("/users/:id/role", verifyFBToken, verifyHR, async (req, res) => {
       const id = req.params.id;
-      const roleInfo = req.body;
-      const query = { _id: new ObjectId(id) }
-      const updatedDoc = {
-        $set: {
-          role: roleInfo.role
-        }
-      }
-      const result = await usersCollection.updateOne(query, updatedDoc)
+      const { role } = req.body;
+
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role } }
+      );
+
       res.send(result);
-    })
+    });
 
-    // Employee related API
+    // ==================== EMPLOYEES APIs ====================
 
-    app.get('/employees', async (req, res) => {
-      const query = {}
-      if (req.query.status) {
-        query.status = req.query.status
-      }
-      const cursor = employeesCollection.find(query)
-      const result = await cursor.toArray();
-      res.send(result)
-    })
+    // ✅ UPDATED: supports status + workStatus filters (for AssignAssets)
+    app.get("/employees", async (req, res) => {
+      const query = {};
+      const { status, workStatus } = req.query;
 
-    app.post('/employees', async (req, res) => {
+      if (status) query.status = status;
+      if (workStatus) query.workStatus = workStatus;
+
+      const result = await employeesCollection.find(query).sort({ createdAt: -1 }).toArray();
+      res.send(result);
+    });
+
+    // ✅ UPDATED: set default workStatus on create
+    app.post("/employees", async (req, res) => {
       const employee = req.body;
 
-      employee.status = 'pending'
+      employee.status = "pending";
+      employee.workStatus = "inactive"; // ✅ UPDATED
       employee.createdAt = new Date();
 
-      const result = await employeesCollection.insertOne(employee)
-      res.send(result)
-    })
+      const result = await employeesCollection.insertOne(employee);
+      res.send(result);
+    });
 
     // approve employee
     app.patch('/employees/:id', verifyFBToken, verifyHR, async (req, res) => {
@@ -168,10 +175,18 @@ async function run() {
         },
       };
 
+      // ✅ THIS IS REQUIRED
+      if (status === "approved") {
+        update.$set.workStatus = "available";
+      }
+      if (status === "rejected") {
+        update.$set.workStatus = "inactive";
+      }
+
       const result = await employeesCollection.updateOne(query, update);
 
-      // if approved -> update user role in USERS collection
-      if (status === 'approved' && email) {
+      // update user role
+      if (status === "approved" && email) {
         await usersCollection.updateOne(
           { email },
           { $set: { role: 'employee' } }
@@ -181,68 +196,96 @@ async function run() {
       res.send(result);
     });
 
-    // reject employee (delete)
-    app.delete('/employees/:id', async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
 
-      const result = await employeesCollection.deleteOne(query);
+    app.delete("/employees/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await employeesCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
+    // ==================== REQUESTS APIs ====================
 
-    //  Requests Related API
-    app.get('/requests', async (req, res) => {
-      const query = {}
-      const { email } = req.query;
-      if (email) {
-        query.employeeEmail = email;
-      }
-      const options = { sort: { createdAt: -1 } }
+    // ✅ UPDATED: supports BOTH email filter & requestStatus filter
+    app.get("/requests", async (req, res) => {
+      const query = {};
+      const { email, requestStatus } = req.query;
 
-      const cursor = requestsCollection.find(query, options);
-      const result = await cursor.toArray()
+      if (email) query.employeeEmail = email; // employee view
+      if (requestStatus) query.requestStatus = requestStatus; // HR / Assign view
+
+      const result = await requestsCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+
       res.send(result);
-    })
+    });
 
-    app.post('/requests', async (req, res) => {
+    app.post("/requests", async (req, res) => {
       const request = req.body;
 
-      request.requestStatus = 'pending';
+      request.requestStatus = "pending";
       request.createdAt = new Date();
       request.approvalDate = null;
 
       const result = await requestsCollection.insertOne(request);
       res.send(result);
-    })
+    });
 
-    app.delete('/requests/:id', async (req, res) => {
+    app.delete("/requests/:id", async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await requestsCollection.deleteOne(query)
-      res.send(result);
-    })
-
-    //  Packages Related API
-    app.get('/packages', async (req, res) => {
-      const cursor = packagesCollection.find({}).sort({ employeeLimit: 1 });
-      const result = await cursor.toArray();
+      const result = await requestsCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
-    //  Payments API (NEW)
-    app.get('/payments', verifyFBToken, async (req, res) => {
+    // ✅ UPDATED (ZapShift style): Assign request + set employee busy
+    app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
+      const { employeeId, employeeName, employeeEmail } = req.body;
+      const id = req.params.id;
+
+      // 1) update request
+      const requestResult = await requestsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            requestStatus: "assigned",
+            assignedEmployeeId: employeeId,
+            assignedEmployeeName: employeeName,
+            assignedEmployeeEmail: employeeEmail,
+            assignedAt: new Date(),
+          },
+        }
+      );
+
+      // 2) set employee busy
+      const employeeResult = await employeesCollection.updateOne(
+        { _id: new ObjectId(employeeId) },
+        { $set: { workStatus: "busy" } }
+      );
+
+      res.send({ requestResult, employeeResult });
+    });
+
+    // ==================== PACKAGES APIs ====================
+
+    app.get("/packages", async (req, res) => {
+      const result = await packagesCollection.find({}).sort({ employeeLimit: 1 }).toArray();
+      res.send(result);
+    });
+
+    // ==================== PAYMENTS APIs ====================
+
+    app.get("/payments", verifyFBToken, async (req, res) => {
       const email = req.query.email;
       const query = {};
 
-      // console.log('Header look', req.headers)
-
       if (email) {
         query.hrEmail = email;
-        if (email !== req.decoded_email) {
-          return res.status(403).send({ message: 'forbidden access' })
-        }
 
+        // ✅ security check
+        if (email !== req.decoded_email) {
+          return res.status(403).send({ message: "forbidden access" });
+        }
       }
 
       const result = await paymentsCollection
@@ -253,8 +296,9 @@ async function run() {
       res.send(result);
     });
 
-    //  Stripe Checkout Session
-    app.post('/create-checkout-session', async (req, res) => {
+    // ==================== STRIPE APIs ====================
+
+    app.post("/create-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
       const amount = parseInt(paymentInfo.price) * 100;
 
@@ -262,16 +306,14 @@ async function run() {
         line_items: [
           {
             price_data: {
-              currency: 'usd',
+              currency: "usd",
               unit_amount: amount,
-              product_data: {
-                name: `AssetVerse Package: ${paymentInfo.packageName}`,
-              },
+              product_data: { name: `AssetVerse Package: ${paymentInfo.packageName}` },
             },
             quantity: 1,
           },
         ],
-        mode: 'payment',
+        mode: "payment",
         customer_email: paymentInfo.hrEmail,
 
         success_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade-success?session_id={CHECKOUT_SESSION_ID}`,
@@ -287,44 +329,39 @@ async function run() {
       res.send({ url: session.url });
     });
 
-    //  Upgrade Success
-    app.patch('/upgrade-success', async (req, res) => {
+    app.patch("/upgrade-success", async (req, res) => {
       const sessionId = req.query.session_id;
-
       const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-      if (session.payment_status !== 'paid') {
-        return res.send({ success: false, message: 'Payment not completed' });
+      if (session.payment_status !== "paid") {
+        return res.send({ success: false, message: "Payment not completed" });
       }
 
       const hrEmail = session.customer_email;
       const packageName = session.metadata.packageName;
       const employeeLimit = Number(session.metadata.employeeLimit);
 
-      //  prevent duplicate insert
       const transactionId = session.payment_intent;
-      const paymentExists = await paymentsCollection.findOne({ transactionId });
 
+      // ✅ prevent duplicates
+      const paymentExists = await paymentsCollection.findOne({ transactionId });
       if (paymentExists) {
-        return res.send({
-          success: true,
-          message: "Payment already recorded",
-          transactionId,
-        });
+        return res.send({ success: true, message: "Payment already recorded", transactionId });
       }
 
-      //  Update HR user package info
-      const userQuery = { email: hrEmail, role: 'hr' };
-      const userUpdate = {
-        $set: {
-          subscription: packageName.toLowerCase(),
-          packageLimit: employeeLimit,
-          updatedAt: new Date(),
-        },
-      };
-      const updateResult = await usersCollection.updateOne(userQuery, userUpdate);
+      // 1) update HR user
+      const updateResult = await usersCollection.updateOne(
+        { email: hrEmail, role: "hr" },
+        {
+          $set: {
+            subscription: packageName.toLowerCase(),
+            packageLimit: employeeLimit,
+            updatedAt: new Date(),
+          },
+        }
+      );
 
-      //  Save payment history
+      // 2) insert payment history
       const paymentDoc = {
         hrEmail,
         packageName,
@@ -332,30 +369,29 @@ async function run() {
         amount: session.amount_total / 100,
         transactionId,
         paymentDate: new Date(),
-        status: 'completed',
+        status: "completed",
       };
+
       const paymentResult = await paymentsCollection.insertOne(paymentDoc);
 
-      return res.send({
-        success: true,
-        transactionId,
-        updateResult,
-        paymentResult,
-      });
+      res.send({ success: true, transactionId, updateResult, paymentResult });
     });
 
+    // Ping
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // await client.close();
   }
 }
+
 run().catch(console.dir);
 
-app.get('/', (req, res) => {
-  res.send('Asset Verse Server Running')
-})
+// -------------------- Root --------------------
+app.get("/", (req, res) => {
+  res.send("Asset Verse Server Running");
+});
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
-})
+  console.log(`Example app listening on port ${port}`);
+});

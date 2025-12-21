@@ -65,3 +65,20 @@ app.get('/users/:email/role', async (req, res) => {
   const user = await usersCollection.findOne({ email });
   res.send({ role: user?.role || 'employee' });
 });
+
+
+//  Requests Related API
+    app.get('/requests', async (req, res) => {
+      const query = {}
+      const { email } = req.query;
+      if (email) {
+        query.employeeEmail = email;
+      }
+
+      
+      const options = { sort: { createdAt: -1 } }
+
+      const cursor = requestsCollection.find(query, options);
+      const result = await cursor.toArray()
+      res.send(result);
+    })
