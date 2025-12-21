@@ -154,7 +154,7 @@ async function run() {
       const employee = req.body;
 
       employee.status = "pending";
-      employee.workStatus = "inactive"; // ✅ UPDATED
+      employee.workStatus = "inactive"; 
       employee.createdAt = new Date();
 
       const result = await employeesCollection.insertOne(employee);
@@ -172,6 +172,7 @@ async function run() {
         $set: {
           status,
           approvedAt: new Date(),
+          workStatus: status === "approved" ? "available" : "inactive",
         },
       };
 
@@ -238,7 +239,7 @@ async function run() {
       res.send(result);
     });
 
-    // ✅ UPDATED (ZapShift style): Assign request + set employee busy
+    // ✅ UPDATED Assign request + set employee busy
     app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
       const { employeeId, employeeName, employeeEmail } = req.body;
       const id = req.params.id;
@@ -264,6 +265,38 @@ async function run() {
       );
 
       res.send({ requestResult, employeeResult });
+    });
+
+    // 21/12/25
+    // 8.58 am
+
+    // HR updates request status (complete/returned/rejected etc.)
+    app.patch("/requests/:id/status", verifyFBToken, verifyHR, async (req, res) => {
+      const { requestStatus } = req.body; // "approved" | "rejected" | "returned" | "completed"
+      const id = req.params.id;
+
+      // get request to know assigned employee
+      const request = await requestsCollection.findOne({ _id: new ObjectId(id) });
+
+      const result = await requestsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            requestStatus,
+            approvalDate: new Date(),
+          },
+        }
+      );
+
+      // if work finished, make employee available again
+      if (["returned", "completed", "rejected"].includes(requestStatus) && request?.assignedEmployeeId) {
+        await employeesCollection.updateOne(
+          { _id: new ObjectId(request.assignedEmployeeId) },
+          { $set: { workStatus: "available" } }
+        );
+      }
+
+      res.send(result);
     });
 
     // ==================== PACKAGES APIs ====================
