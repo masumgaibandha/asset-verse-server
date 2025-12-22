@@ -1,5 +1,3 @@
-// index.js (CLEAN - AssetVerse Server)
-
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -12,9 +10,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // -------------------- Firebase Admin --------------------
-const serviceAccount = JSON.parse(
-  Buffer.from(process.env.FIREBASE_ADMIN_B64, "base64").toString("utf8")
-);
+const decoded = Buffer.from(process.env.FIREBASE_ADMIN_B64, "base64").toString("utf8");
+const serviceAccount = JSON.parse(decoded);
+
+
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -557,7 +556,7 @@ async function run() {
       res.send(result);
     });
 
-    // ✅ MINIMUM FIX: use 403 (not 402) for "no credit" to match frontend checks
+    
     app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
       const { employeeId, employeeName, employeeEmail } = req.body;
       const id = req.params.id;
@@ -790,8 +789,8 @@ async function run() {
     });
 
     // Ping
-    await db.command({ ping: 1 });
-    console.log("✅ MongoDB connected");
+    // await db.command({ ping: 1 });
+    // console.log(" MongoDB connected");
   } finally {
     // keep open for server
   }
