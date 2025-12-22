@@ -333,6 +333,18 @@ async function run() {
       res.send(result);
     });
 
+    app.patch("/hr/employees/remove", verifyFBToken, verifyHR, async (req, res) => {
+      const hrEmail = req.decoded_email;
+      const { employeeEmail } = req.body;
+
+      const result = await employeeAffiliationsCollection.updateOne(
+        { hrEmail, employeeEmail, status: "active" },
+        { $set: { status: "inactive", removedAt: new Date() } }
+      );
+
+      res.send(result);
+    });
+
 
     app.post("/assets", verifyFBToken, verifyHR, async (req, res) => {
       const hrEmail = req.decoded_email;
@@ -641,6 +653,7 @@ async function run() {
           $setOnInsert: {
             employeeEmail: request.employeeEmail,
             employeeName: request.employeeName,
+            photoURL: request.employeePhotoURL || request.photoURL || "",
             hrEmail,
             companyName: request.companyName,
             companyLogo: request.companyLogo || "",
