@@ -428,3 +428,179 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });
+
+
+
+
+// Latest
+
+const express = require("express");
+const cors = require("cors");
+require("dotenv").config();
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+const admin = require("firebase-admin");
+const app = express();
+const port = process.env.PORT || 3000;
+
+// -------------------- Firebase Admin --------------------
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_ADMIN_B64, "base64").toString("utf8")
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// -------------------- Middleware --------------------
+app.use(express.json());
+app.use(cors());
+
+// -------------------- Auth Middlewares --------------------
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
+  if (!token) return res.status(401).send({ message: "unauthorized access" });
+  try {
+    const idToken = token.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    req.decoded_email = decoded.email;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
+
+// -------------------- MongoDB --------------------
+const uri = mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.xhu33ja.mongodb.net/?appName=Cluster0;
+
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
+
+async function run() {
+  try {
+    await client.connect();
+
+    const db = client.db("asset-verse");
+    const usersCollection = db.collection("users");
+    const employeesCollection = db.collection("employees");
+    const assetsCollection = db.collection("assets");
+    const requestsCollection = db.collection("requests");
+    const assignedAssetsCollection = db.collection("assignedAssets");
+    const employeeAffiliationsCollection = db.collection("employeeAffiliations");
+    const packagesCollection = db.collection("packages");
+    const paymentsCollection = db.collection("payments");
+
+    // -------------------- Role Middleware --------------------
+    const verifyHR = async (req, res, next) => {
+      const email = req.decoded_email;
+      const user = await usersCollection.findOne({ email });
+      if (!user || user.role !== "hr")
+        return res.status(403).send({ message: "forbidden access" });
+      next();
+    };
+
+    // ==================== USERS ====================
+    app.get("/users", verifyFBToken, async (req, res) => {
+      const searchText = req.query.searchText;
+      const query = {};
+      if (searchText) {
+        query.$or = [
+          { displayName: { $regex: searchText, $options: "i" } },
+          { email: { $regex: searchText, $options: "i" } },
+        ];
+      }
+      const result = await usersCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/users/me", verifyFBToken, async (req, res) => {
+      const email = req.decoded_email;
+      const user = await usersCollection.findOne({ email });
+      res.send(user || {});
+    });
+
+    app.patch("/users/me", verifyFBToken, async (req, res) => {
+      const email = req.decoded_email;
+      const { displayName, photoURL } = req.body;
+      const updateDoc = { $set: { updatedAt: new Date() } };
+      if (displayName) updateDoc.$set.displayName = displayName;
+      if (photoURL) updateDoc.$set.photoURL = photoURL;
+      const result = await usersCollection.updateOne({ email }, updateDoc);
+      const updatedUser = await usersCollection.findOne({ email });
+      res.send({ result, user: updatedUser });
+    });
+
+    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+      const user = await usersCollection.findOne({ email });
+      res.send({ role: user?.role || "user" });
+    });
+
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      user.role = user.role || "user";
+      user.createdAt = new Date();
+      const exists = await usersCollection.findOne({ email: user.email });
+      if (exists) return res.send({ message: "user exists" });
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+
+    app.post("/users/hr", async (req, res) => {
+      const user = req.body;
+      const exists = await usersCollection.findOne({ email: user.email });
+      if (exists) return res.send({ message: "user exists" });
+      const hrDoc = {
+        email: user.email,
+        displayName: user.displayName || "HR",
+        photoURL: user.photoURL || "",
+        role: "hr",
+        subscription: "free",
+        packageLimit: 5,
+        createdAt: new Date(),
+      };
+      const result = await usersCollection.insertOne(hrDoc);
+      res.send(result);
+    });
+
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyHR,
+      async (req, res) => {
+        const id = req.params.id;
+        const { role } = req.body;
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+        res.send(result);
+      }
+    );
+
+    // -------------------- Root --------------------
+    app.get("/", (req, res) => {
+      res.send("AssetVerse Server Running");
+    });
+
+    await db.command({ ping: 1 });
+    console.log("✅ MongoDB connected");
+  } finally {
+  }
+}
+
+run().catch(console.dir);
+
+app.listen(port, () => {
+  console.log(✅ Server running on port ${port});
+});
+
