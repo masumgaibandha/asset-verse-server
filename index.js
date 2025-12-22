@@ -23,7 +23,11 @@ admin.initializeApp({
 app.use(express.json());
 app.use(
   cors({
-    origin: [process.env.SITE_DOMAIN || "http://localhost:5173"],
+    origin: [
+      "http://localhost:5173",
+      "https://asset-verse-b5fc2.web.app",
+      "https://asset-verse-b5fc2.firebaseapp.com",
+    ],
     credentials: true,
   })
 );
@@ -556,7 +560,7 @@ async function run() {
       res.send(result);
     });
 
-    
+
     app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
       const { employeeId, employeeName, employeeEmail } = req.body;
       const id = req.params.id;
