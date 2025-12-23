@@ -52,7 +52,7 @@ const client = new MongoClient(uri, {
   serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
 });
 
-// ✅ collections as globals (so routes work even if connect is async)
+// ✅ Global collections (serverless-safe)
 let usersCollection,
   employeesCollection,
   assetsCollection,
@@ -62,12 +62,45 @@ let usersCollection,
   packagesCollection,
   paymentsCollection;
 
-// -------------------- Role Middleware (uses global usersCollection) --------------------
+// ✅ Connect once (Vercel serverless)
+let dbPromise;
+
+const connectDB = () => {
+  if (!dbPromise) {
+    dbPromise = client.connect().then(() => {
+      const db = client.db("asset-verse");
+
+      usersCollection = db.collection("users");
+      employeesCollection = db.collection("employees");
+      assetsCollection = db.collection("assets");
+      requestsCollection = db.collection("requests");
+      assignedAssetsCollection = db.collection("assignedAssets");
+      employeeAffiliationsCollection = db.collection("employeeAffiliations");
+      packagesCollection = db.collection("packages");
+      paymentsCollection = db.collection("payments");
+
+      console.log("✅ Mongo connected");
+      return db;
+    });
+  }
+  return dbPromise;
+};
+
+const ensureDB = async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (e) {
+    console.log("❌ DB connect failed:", e);
+    res.status(500).send({ message: "db connect failed" });
+  }
+};
+
+
+// -------------------- Role Middleware --------------------
 const verifyHR = async (req, res, next) => {
   const email = req.decoded_email;
   if (!email) return res.status(401).send({ message: "unauthorized access" });
-
-  if (!usersCollection) return res.status(503).send({ message: "db not ready" });
 
   const user = await usersCollection.findOne({ email });
   if (!user || user.role !== "hr") {
@@ -78,7 +111,7 @@ const verifyHR = async (req, res, next) => {
 
 // ==================== USERS ====================
 
-app.get("/users", verifyFBToken, async (req, res) => {
+app.get("/users", verifyFBToken, ensureDB, async (req, res) => {
   const searchText = req.query.searchText;
   const query = {};
 
@@ -93,13 +126,13 @@ app.get("/users", verifyFBToken, async (req, res) => {
   res.send(result);
 });
 
-app.get("/users/me", verifyFBToken, async (req, res) => {
+app.get("/users/me", verifyFBToken, ensureDB, async (req, res) => {
   const email = req.decoded_email;
   const user = await usersCollection.findOne({ email });
   res.send(user || {});
 });
 
-app.patch("/users/me", verifyFBToken, async (req, res) => {
+app.patch("/users/me", verifyFBToken, ensureDB, async (req, res) => {
   const email = req.decoded_email;
   const { displayName, photoURL } = req.body;
 
@@ -113,13 +146,13 @@ app.patch("/users/me", verifyFBToken, async (req, res) => {
   res.send({ result, user: updatedUser });
 });
 
-app.get("/users/:email/role", verifyFBToken, async (req, res) => {
+app.get("/users/:email/role", verifyFBToken, ensureDB, async (req, res) => {
   const email = req.params.email;
   const user = await usersCollection.findOne({ email });
   res.send({ role: user?.role || "user" });
 });
 
-app.post("/users", async (req, res) => {
+app.post("/users", ensureDB, async (req, res) => {
   const user = req.body;
   user.role = user.role || "user";
   user.createdAt = new Date();
@@ -131,7 +164,7 @@ app.post("/users", async (req, res) => {
   res.send(result);
 });
 
-app.post("/users/hr", async (req, res) => {
+app.post("/users/hr", ensureDB, async (req, res) => {
   const user = req.body;
 
   const exists = await usersCollection.findOne({ email: user.email });
@@ -151,7 +184,7 @@ app.post("/users/hr", async (req, res) => {
   res.send(result);
 });
 
-app.patch("/users/:id/role", verifyFBToken, verifyHR, async (req, res) => {
+app.patch("/users/:id/role", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const id = req.params.id;
   const { role } = req.body;
 
@@ -161,7 +194,7 @@ app.patch("/users/:id/role", verifyFBToken, verifyHR, async (req, res) => {
 
 // ==================== EMPLOYEES ====================
 
-app.get("/employees", async (req, res) => {
+app.get("/employees", ensureDB, async (req, res) => {
   const query = {};
   const { status, workStatus } = req.query;
   if (status) query.status = status;
@@ -171,7 +204,7 @@ app.get("/employees", async (req, res) => {
   res.send(result);
 });
 
-app.post("/employees", async (req, res) => {
+app.post("/employees", ensureDB, async (req, res) => {
   try {
     const employee = req.body;
     employee.status = "pending";
@@ -185,7 +218,7 @@ app.post("/employees", async (req, res) => {
   }
 });
 
-app.patch("/employees/:id", verifyFBToken, verifyHR, async (req, res) => {
+app.patch("/employees/:id", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const { status, email } = req.body;
   const id = req.params.id;
 
@@ -206,7 +239,7 @@ app.patch("/employees/:id", verifyFBToken, verifyHR, async (req, res) => {
   res.send(result);
 });
 
-app.delete("/employees/:id", async (req, res) => {
+app.delete("/employees/:id", ensureDB, async (req, res) => {
   const id = req.params.id;
   const result = await employeesCollection.deleteOne({ _id: new ObjectId(id) });
   res.send(result);
@@ -214,7 +247,7 @@ app.delete("/employees/:id", async (req, res) => {
 
 // ==================== AFFILIATIONS / TEAM ====================
 
-app.get("/affiliations/me", verifyFBToken, async (req, res) => {
+app.get("/affiliations/me", verifyFBToken, ensureDB, async (req, res) => {
   const employeeEmail = req.decoded_email;
 
   const result = await employeeAffiliationsCollection
@@ -225,7 +258,7 @@ app.get("/affiliations/me", verifyFBToken, async (req, res) => {
   res.send(result);
 });
 
-app.get("/team", verifyFBToken, async (req, res) => {
+app.get("/team", verifyFBToken, ensureDB, async (req, res) => {
   const employeeEmail = req.decoded_email;
   const { hrEmail } = req.query;
 
@@ -249,7 +282,7 @@ app.get("/team", verifyFBToken, async (req, res) => {
 
 // ==================== ASSIGNED ASSETS (Employee) ====================
 
-app.get("/assigned-assets", verifyFBToken, async (req, res) => {
+app.get("/assigned-assets", verifyFBToken, ensureDB, async (req, res) => {
   const email = req.query.email;
 
   if (!email) return res.status(400).send({ message: "email required" });
@@ -263,7 +296,7 @@ app.get("/assigned-assets", verifyFBToken, async (req, res) => {
   res.send(result);
 });
 
-app.patch("/assigned-assets/:id/return", verifyFBToken, async (req, res) => {
+app.patch("/assigned-assets/:id/return", verifyFBToken, ensureDB, async (req, res) => {
   const id = req.params.id;
 
   const item = await assignedAssetsCollection.findOne({ _id: new ObjectId(id) });
@@ -288,7 +321,10 @@ app.patch("/assigned-assets/:id/return", verifyFBToken, async (req, res) => {
     { $set: { status: "returned", returnDate: new Date() } }
   );
 
-  await assetsCollection.updateOne({ _id: new ObjectId(item.assetId) }, { $inc: { availableQuantity: qty } });
+  await assetsCollection.updateOne(
+    { _id: new ObjectId(item.assetId) },
+    { $inc: { availableQuantity: qty } }
+  );
 
   if (item.requestId) {
     await requestsCollection.updateOne(
@@ -302,7 +338,7 @@ app.patch("/assigned-assets/:id/return", verifyFBToken, async (req, res) => {
 
 // ==================== HR EMPLOYEE LIST ====================
 
-app.get("/hr/employees", verifyFBToken, verifyHR, async (req, res) => {
+app.get("/hr/employees", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   try {
     const hrEmail = req.decoded_email;
 
@@ -354,7 +390,7 @@ app.get("/hr/employees", verifyFBToken, verifyHR, async (req, res) => {
   }
 });
 
-app.patch("/hr/employees/remove", verifyFBToken, verifyHR, async (req, res) => {
+app.patch("/hr/employees/remove", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   try {
     const hrEmail = req.decoded_email;
     const { employeeEmail } = req.body;
@@ -375,7 +411,7 @@ app.patch("/hr/employees/remove", verifyFBToken, verifyHR, async (req, res) => {
 
 // ==================== ASSETS (HR) ====================
 
-app.post("/assets", verifyFBToken, verifyHR, async (req, res) => {
+app.post("/assets", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const hrEmail = req.decoded_email;
   const asset = req.body;
 
@@ -394,7 +430,7 @@ app.post("/assets", verifyFBToken, verifyHR, async (req, res) => {
   res.send(result);
 });
 
-app.get("/assets", verifyFBToken, verifyHR, async (req, res) => {
+app.get("/assets", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const hrEmail = req.decoded_email;
   const { type, search } = req.query;
 
@@ -418,7 +454,7 @@ app.get("/assets", verifyFBToken, verifyHR, async (req, res) => {
   res.send({ total, page, limit, totalPages: Math.ceil(total / limit), result });
 });
 
-app.patch("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
+app.patch("/assets/:id", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const id = req.params.id;
   const update = req.body;
   const hrEmail = req.decoded_email;
@@ -446,7 +482,7 @@ app.patch("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
   res.send(result);
 });
 
-app.delete("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
+app.delete("/assets/:id", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const id = req.params.id;
   const hrEmail = req.decoded_email;
 
@@ -454,14 +490,17 @@ app.delete("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
   res.send(result);
 });
 
-app.get("/assets/available", verifyFBToken, async (req, res) => {
-  const result = await assetsCollection.find({ availableQuantity: { $gt: 0 } }).sort({ dateAdded: -1 }).toArray();
+app.get("/assets/available", verifyFBToken, ensureDB, async (req, res) => {
+  const result = await assetsCollection
+    .find({ availableQuantity: { $gt: 0 } })
+    .sort({ dateAdded: -1 })
+    .toArray();
   res.send(result);
 });
 
 // ==================== HR ANALYTICS ====================
 
-app.get("/hr/stats/asset-types", verifyFBToken, verifyHR, async (req, res) => {
+app.get("/hr/stats/asset-types", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const hrEmail = req.decoded_email;
 
   const data = await assetsCollection
@@ -475,7 +514,7 @@ app.get("/hr/stats/asset-types", verifyFBToken, verifyHR, async (req, res) => {
   res.send(data);
 });
 
-app.get("/hr/stats/top-requested", verifyFBToken, verifyHR, async (req, res) => {
+app.get("/hr/stats/top-requested", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const hrEmail = req.decoded_email;
 
   const data = await requestsCollection
@@ -493,7 +532,7 @@ app.get("/hr/stats/top-requested", verifyFBToken, verifyHR, async (req, res) => 
 
 // ==================== REQUESTS ====================
 
-app.get("/requests", verifyFBToken, async (req, res) => {
+app.get("/requests", verifyFBToken, ensureDB, async (req, res) => {
   const query = {};
   const { email, requestStatus } = req.query;
 
@@ -504,7 +543,7 @@ app.get("/requests", verifyFBToken, async (req, res) => {
   res.send(result);
 });
 
-app.post("/requests/employee", verifyFBToken, async (req, res) => {
+app.post("/requests/employee", verifyFBToken, ensureDB, async (req, res) => {
   const data = req.body;
 
   if (data.requesterEmail !== req.decoded_email) {
@@ -536,56 +575,19 @@ app.post("/requests/employee", verifyFBToken, async (req, res) => {
   res.send(result);
 });
 
-app.delete("/requests/:id", verifyFBToken, async (req, res) => {
+app.delete("/requests/:id", verifyFBToken, ensureDB, async (req, res) => {
   const id = req.params.id;
   const result = await requestsCollection.deleteOne({ _id: new ObjectId(id) });
   res.send(result);
 });
 
-app.get("/requests/hr", verifyFBToken, verifyHR, async (req, res) => {
+app.get("/requests/hr", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const hrEmail = req.decoded_email;
   const result = await requestsCollection.find({ hrEmail }).sort({ createdAt: -1 }).toArray();
   res.send(result);
 });
 
-app.patch("/requests/:id/assign", verifyFBToken, verifyHR, async (req, res) => {
-  const { employeeId, employeeName, employeeEmail } = req.body;
-  const id = req.params.id;
-  const hrEmail = req.decoded_email;
-
-  const hr = await usersCollection.findOne({ email: hrEmail, role: "hr" });
-  if (!hr) return res.status(403).send({ message: "forbidden access" });
-
-  const credit = Number(hr.packageLimit ?? 0);
-  if (credit <= 0) return res.status(403).send({ message: "No credit left" });
-
-  const requestResult = await requestsCollection.updateOne(
-    { _id: new ObjectId(id) },
-    {
-      $set: {
-        requestStatus: "assigned",
-        assignedEmployeeId: employeeId,
-        assignedEmployeeName: employeeName,
-        assignedEmployeeEmail: employeeEmail,
-        assignedAt: new Date(),
-      },
-    }
-  );
-
-  const employeeResult = await employeesCollection.updateOne(
-    { _id: new ObjectId(employeeId) },
-    { $set: { workStatus: "busy" } }
-  );
-
-  const creditResult = await usersCollection.updateOne(
-    { email: hrEmail, role: "hr", packageLimit: { $gt: 0 } },
-    { $inc: { packageLimit: -1 } }
-  );
-
-  res.send({ requestResult, employeeResult, creditResult });
-});
-
-app.patch("/requests/:id/decision", verifyFBToken, verifyHR, async (req, res) => {
+app.patch("/requests/:id/decision", verifyFBToken, ensureDB, verifyHR, async (req, res) => {
   const id = req.params.id;
   const { decision } = req.body;
 
@@ -687,13 +689,13 @@ app.patch("/requests/:id/decision", verifyFBToken, verifyHR, async (req, res) =>
 });
 
 // ==================== PACKAGES ====================
-app.get("/packages", async (req, res) => {
+app.get("/packages", ensureDB, async (req, res) => {
   const result = await packagesCollection.find({}).sort({ employeeLimit: 1 }).toArray();
   res.send(result);
 });
 
 // ==================== PAYMENTS ====================
-app.get("/payments", verifyFBToken, async (req, res) => {
+app.get("/payments", verifyFBToken, ensureDB, async (req, res) => {
   const email = req.query.email;
   const query = {};
 
@@ -708,7 +710,7 @@ app.get("/payments", verifyFBToken, async (req, res) => {
 
 // ==================== STRIPE ====================
 
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", ensureDB, async (req, res) => {
   const paymentInfo = req.body;
   const amount = parseInt(paymentInfo.price) * 100;
 
@@ -739,7 +741,7 @@ app.post("/create-checkout-session", async (req, res) => {
   res.send({ url: session.url });
 });
 
-app.patch("/upgrade-success", async (req, res) => {
+app.patch("/upgrade-success", ensureDB, async (req, res) => {
   const sessionId = req.query.session_id;
   const session = await stripe.checkout.sessions.retrieve(sessionId);
 
@@ -782,27 +784,6 @@ app.patch("/upgrade-success", async (req, res) => {
 app.get("/", (req, res) => {
   res.send("AssetVerse Server Running");
 });
-
-// -------------------- DB connect --------------------
-async function run() {
-  try {
-    await client.connect();
-    const db = client.db("asset-verse");
-
-    // ✅ assign to globals (NO const)
-    usersCollection = db.collection("users");
-    employeesCollection = db.collection("employees");
-    assetsCollection = db.collection("assets");
-    requestsCollection = db.collection("requests");
-    assignedAssetsCollection = db.collection("assignedAssets");
-    employeeAffiliationsCollection = db.collection("employeeAffiliations");
-    packagesCollection = db.collection("packages");
-    paymentsCollection = db.collection("payments");
-  } finally {
-    // keep open for serverless
-  }
-}
-run().catch(console.dir);
 
 module.exports = app;
 
